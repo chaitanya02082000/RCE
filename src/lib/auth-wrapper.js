@@ -24,7 +24,7 @@ export const clearStoredSession = () => {
   console.log("🗑️ Session cleared from storage");
 };
 
-// ✅ Wrapper functions that handle session storage
+// ✅ Email Sign Up
 export const signUpWithEmail = async (email, password, name) => {
   try {
     const result = await authClient.signUp.email({
@@ -35,7 +35,6 @@ export const signUpWithEmail = async (email, password, name) => {
 
     if (result.data) {
       storeSession(result.data);
-      // Force redirect after successful signup
       setTimeout(() => {
         window.location.href = "/dashboard";
       }, 100);
@@ -48,6 +47,7 @@ export const signUpWithEmail = async (email, password, name) => {
   }
 };
 
+// ✅ Email Sign In
 export const signInWithEmail = async (email, password) => {
   try {
     const result = await authClient.signIn.email({
@@ -57,7 +57,6 @@ export const signInWithEmail = async (email, password) => {
 
     if (result.data) {
       storeSession(result.data);
-      // Force redirect after successful signin
       setTimeout(() => {
         window.location.href = "/dashboard";
       }, 100);
@@ -70,6 +69,25 @@ export const signInWithEmail = async (email, password) => {
   }
 };
 
+// ✅ Google Sign In
+export const signInWithGoogle = async () => {
+  try {
+    console.log("🔵 Starting Google Sign In...");
+
+    // This will redirect to Google OAuth
+    const result = await authClient.signIn.social({
+      provider: "google",
+      callbackURL: "/auth/callback",
+    });
+
+    return result;
+  } catch (error) {
+    console.error("Google sign in error:", error);
+    throw error;
+  }
+};
+
+// ✅ Sign Out
 export const signOutUser = async () => {
   try {
     await authClient.signOut();
@@ -85,10 +103,8 @@ export const signOutUser = async () => {
 // ✅ Check if user has valid session
 export const checkSession = async () => {
   try {
-    // First check localStorage
     const stored = getStoredSession();
 
-    // Then verify with backend
     const response = await fetch(
       `${import.meta.env.VITE_API_URL || "http://localhost:3000"}/api/auth/get-session`,
       {
@@ -106,14 +122,13 @@ export const checkSession = async () => {
       return data;
     }
 
-    // If backend says no session, clear local storage
     if (stored && !data.session) {
       clearStoredSession();
     }
 
-    return stored; // Fallback to stored session
+    return stored;
   } catch (error) {
     console.error("Session check error:", error);
-    return getStoredSession(); // Fallback to stored session
+    return getStoredSession();
   }
 };

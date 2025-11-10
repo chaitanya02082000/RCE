@@ -1,6 +1,7 @@
 import { Routes, Route, Navigate } from "react-router-dom";
 import { ThemeProvider } from "./components/theme-provider";
 import AuthPage from "./pages/auth/AuthPage";
+import OAuthCallback from "./pages/auth/OAuthCallback";
 import HomePage from "./pages/HomePage.jsx";
 import SnippetsPage from "./pages/SnippetsPage.jsx";
 import { useSession } from "@/lib/auth-client";
@@ -13,6 +14,8 @@ function App() {
       <Routes>
         <Route path="/" element={<RootRoute />} />
         <Route path="/auth/:pathname" element={<AuthRoute />} />
+        {/* ✅ OAuth callback route */}
+        <Route path="/auth/callback" element={<OAuthCallback />} />
         <Route path="/dashboard" element={<ProtectedDashboard />} />
         <Route path="/snippets" element={<ProtectedSnippets />} />
         <Route path="*" element={<Navigate to="/" replace />} />
@@ -21,7 +24,6 @@ function App() {
   );
 }
 
-// ✅ Root route with localStorage fallback
 function RootRoute() {
   const { data: session, isPending } = useSession();
   const [storedSession, setStoredSession] = useState(null);
@@ -41,7 +43,6 @@ function RootRoute() {
     return <LoadingScreen />;
   }
 
-  // Check both cookie session and stored session
   const hasSession = session || storedSession;
 
   return hasSession ? (
@@ -51,7 +52,6 @@ function RootRoute() {
   );
 }
 
-// ✅ Auth route - redirect if logged in
 function AuthRoute() {
   const { data: session, isPending } = useSession();
   const [storedSession, setStoredSession] = useState(null);
@@ -66,7 +66,6 @@ function AuthRoute() {
       !!stored,
     );
 
-    // If we have a stored session, redirect to dashboard
     if (stored && !session) {
       console.log("✅ Found stored session, redirecting to dashboard");
       window.location.href = "/dashboard";
@@ -86,7 +85,6 @@ function AuthRoute() {
   return <AuthPage />;
 }
 
-// ✅ Protected Dashboard with fallback
 function ProtectedDashboard() {
   const { data: session, isPending } = useSession();
   const [storedSession, setStoredSession] = useState(null);
@@ -116,7 +114,6 @@ function ProtectedDashboard() {
   return <HomePage />;
 }
 
-// ✅ Protected Snippets with fallback
 function ProtectedSnippets() {
   const { data: session, isPending } = useSession();
   const [storedSession, setStoredSession] = useState(null);
