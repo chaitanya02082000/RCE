@@ -6,146 +6,206 @@ const {
   createUser,
   deleteUser,
   killProcessGroup,
-  cg,
 } = require("./utils");
 const app = express();
 const { v4: uuidv4 } = require("uuid");
-const allowedOrigins = [
-  "http://localhost:8080",
-  "http://localhost:30001",
-  "http://localhost:5173",
-];
 
-// Enable CORS with dynamic origin
+// CORS configuration
 app.use(
   cors({
-    origin: (origin, callback) => {
-      // If no origin or the origin is in the allowed list, allow it
-      if (!origin || allowedOrigins.includes(origin)) {
-        callback(null, true);
-      } else {
-        callback(new Error("Not allowed by CORS"));
-      }
-    },
+    origin: "*",
+    methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allowedHeaders: ["Content-Type", "Authorization"],
+    credentials: true,
   }),
 );
+
 app.use(express.json());
+
+app.get("/", (req, res) => {
+  res.json({
+    status: "Server is running",
+    timestamp: new Date().toISOString(),
+  });
+});
+
+app.get("/api/test", (req, res) => {
+  res.json({ message: "CORS is working!" });
+});
+
 app.post("/api/execute", async (req, res) => {
+  console.log("Received execution request:", {
+    language: req.body.language,
+    codeLength: req.body.code?.length,
+  });
+
   const { code, language } = req.body;
-  const execId = `exec_${uuidv4()}`; // Unique user ID using UUID, we must not use Date to generate an id because users created in the same time ( in parallel ) may have the same id
-  await cg(execId);
-  let pgid; // Process group ID to track
+
+  if (!code || !language) {
+    return res.status(400).json({ error: "Code and language are required" });
+  }
+
+  const execId = `exec_${uuidv4()}`;
 
   try {
-    // Step 1: Create a new user
     await createUser(execId);
     const userHomeDir = `/home/${execId}`;
     const tempDir = path.join(userHomeDir, "temp", execId);
 
-    // Create the temporary directory for this execution
     await execShellCommand(`sudo -u ${execId} mkdir -p ${tempDir}`);
-    const cgroupTasksFile = `/sys/fs/cgroup/pids/engine_${execId}/cgroup.procs`;
-    // Prepare the shell script content
-    let scriptContent = `
-      #!/bin/sh
-      echo $$ >> ${cgroupTasksFile}
-      ulimit -t 10
-    `;
 
-    // Add language-specific execution logic
-    switch (language) {
+    // Escape single quotes in code
+    const escapedCode = code.replace(/'/g, "'\\''");
+
+    // Different limits for different languages
+    let scriptContent = `#!/bin/bash
+set -e
+`;
+
+    // Add language-specific execution logic with appropriate limits
+    switch (language.toLowerCase()) {
       case "java": {
         const className = "Main";
         const javaFilePath = path.join(tempDir, `${className}.java`);
 
-        // Java commands: Write code, compile, and run
         await execShellCommand(
-          `echo '${code}' | sudo -u ${execId} tee ${javaFilePath}`,
+          `echo '${escapedCode}' | sudo -u ${execId} tee ${javaFilePath} > /dev/null`,
         );
 
+        // Java needs more memory
         scriptContent += `
-          javac ${javaFilePath}
-          java -cp ${tempDir} ${className}
-        `;
+ulimit -t 10
+ulimit -u 50
+ulimit -f 10240
+ulimit -m 524288
+javac ${javaFilePath}
+java -Xmx256m -Xms64m -cp ${tempDir} ${className}
+`;
         break;
       }
 
-      case "cpp": {
+      case "cpp":
+      case "c++": {
         const cppFilePath = path.join(tempDir, "program.cpp");
         const executableFile = path.join(tempDir, "program");
 
-        // C++ commands: Write code, compile, and run
         await execShellCommand(
-          `echo '${code}' | sudo -u ${execId} tee ${cppFilePath}`,
+          `echo '${escapedCode}' | sudo -u ${execId} tee ${cppFilePath} > /dev/null`,
         );
 
         scriptContent += `
-          g++ -o ${executableFile} ${cppFilePath}
-          ${executableFile}
-        `;
+ulimit -t 10
+ulimit -u 40
+ulimit -f 10240
+ulimit -d 262144
+ulimit -s 8192
+g++ -o ${executableFile} ${cppFilePath}
+${executableFile}
+`;
         break;
       }
 
-      case "javascript": {
+      case "javascript":
+      case "js": {
         const jsFilePath = path.join(tempDir, "script.js");
 
-        // JavaScript commands: Write code and run
         await execShellCommand(
-          `echo '${code}' | sudo -u ${execId} tee ${jsFilePath}`,
+          `echo '${escapedCode}' | sudo -u ${execId} tee ${jsFilePath} > /dev/null`,
         );
+
+        // Node.js needs reasonable memory to start
         scriptContent += `
-          node ${jsFilePath}
-        `;
+ulimit -t 10
+ulimit -u 40
+ulimit -f 10240
+ulimit -d 262144
+ulimit -s 8192
+node --max-old-space-size=128 ${jsFilePath}
+`;
         break;
       }
 
-      case "python3": {
+      case "python3":
+      case "python": {
         const pyFilePath = path.join(tempDir, "script.py");
 
-        // Python commands: Write code and run
         await execShellCommand(
-          `echo '${code}' | sudo -u ${execId} tee ${pyFilePath}`,
+          `echo '${escapedCode}' | sudo -u ${execId} tee ${pyFilePath} > /dev/null`,
         );
+
         scriptContent += `
-          python3 ${pyFilePath}
-        `;
+ulimit -t 10
+ulimit -u 40
+ulimit -f 10240
+ulimit -d 262144
+ulimit -s 8192
+python3 ${pyFilePath}
+`;
         break;
       }
 
       default:
-        throw new Error("Unsupported language");
+        return res
+          .status(400)
+          .json({ error: `Unsupported language: ${language}` });
     }
 
     // Write the script to a file
     const scriptPath = path.join(tempDir, "execute.sh");
+    const escapedScript = scriptContent.replace(/'/g, "'\\''");
+
     await execShellCommand(
-      `echo '${scriptContent}' | sudo -u ${execId} tee ${scriptPath}`,
+      `echo '${escapedScript}' | sudo -u ${execId} tee ${scriptPath} > /dev/null`,
     );
-    await execShellCommand(`sudo -u ${execId} chmod +x ${scriptPath}`);
+    await execShellCommand(`sudo chmod +x ${scriptPath}`);
 
-    // Step 2: Execute the script in a new process group and get its PGID
-    const pgidCommand = `sudo setsid sh -c 'echo $$ > ${tempDir}/pgid && sudo -u ${execId} sh ${scriptPath} &'`;
+    // Execute the script with timeout
+    const executeCommand = `sudo -u ${execId} timeout 15 bash ${scriptPath} 2>&1`;
 
-    const output = await execShellCommand(pgidCommand);
+    let output;
+    try {
+      output = await execShellCommand(executeCommand, {
+        timeout: 16000,
+        maxBuffer: 1024 * 1024,
+      });
+    } catch (execError) {
+      // Capture error output
+      const errorOutput = execError.message || execError.toString();
 
-    // Step 3: Retrieve the process group ID (PGID)
-    pgid = await execShellCommand(`cat ${tempDir}/pgid`);
-    console.log("pgid ", pgid);
-    // Step 4: Capture the output of the script
-    //const output = await execShellCommand(`sudo -u ${execId} sh ${scriptPath}`);
-
-    // Return the output to the client
-    res.json({ output });
-  } catch (error) {
-    console.error(error);
-
-    // If error occurs, terminate the process group
-    if (pgid) {
-      await killProcessGroup(pgid);
+      if (errorOutput.includes("timeout") || errorOutput.includes("SIGTERM")) {
+        throw new Error(
+          "Execution timeout: Your code took too long to execute (max 15 seconds)",
+        );
+      } else if (
+        errorOutput.includes("Segmentation fault") ||
+        errorOutput.includes("core dumped")
+      ) {
+        throw new Error(
+          "Segmentation fault: Your code caused a memory access violation",
+        );
+      } else if (
+        errorOutput.includes("out of memory") ||
+        errorOutput.includes("OOM")
+      ) {
+        throw new Error("Out of memory: Your code used too much memory");
+      } else if (errorOutput.includes("CPU time")) {
+        throw new Error("CPU time limit exceeded");
+      } else {
+        throw new Error(errorOutput);
+      }
     }
-    res.status(500).json({ error: error.message });
+
+    res.json({
+      output: output || "Program executed successfully with no output",
+      executionTime: new Date().toISOString(),
+    });
+  } catch (error) {
+    console.error("Execution error:", error.message);
+
+    res.status(500).json({
+      error: error.message || "An error occurred during code execution",
+    });
   } finally {
-    // Cleanup - Delete the user and its files
     try {
       await deleteUser(execId);
     } catch (cleanupError) {
@@ -154,4 +214,8 @@ app.post("/api/execute", async (req, res) => {
   }
 });
 
-app.listen(3000, () => console.log("Server running on port 3000"));
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, "0.0.0.0", () => {
+  console.log(`Server running on http://localhost:${PORT}`);
+  console.log(`CORS enabled for all origins`);
+});

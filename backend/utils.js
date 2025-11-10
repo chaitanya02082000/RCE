@@ -1,6 +1,5 @@
 const { exec } = require("child_process");
-const path = require("path");
-const fs = require("fs");
+
 class Semaphore {
   constructor(max) {
     this.max = max;
@@ -13,7 +12,6 @@ class Semaphore {
       this.count++;
       return Promise.resolve();
     }
-
     return new Promise((resolve) => this.queue.push(resolve));
   }
 
@@ -31,96 +29,56 @@ const userCreationSemaphore = new Semaphore(1);
 
 const execShellCommand = (cmd, options = {}) => {
   return new Promise((resolve, reject) => {
-    exec(cmd, { ...options }, (error, stdout, stderr) => {
-      if (error || stderr) {
-        console.log("error ", error);
-        console.log("stderr: ", stderr);
-        reject(stderr || error.message);
+    const defaultOptions = {
+      timeout: 20000,
+      maxBuffer: 1024 * 1024,
+      ...options,
+    };
+
+    exec(cmd, defaultOptions, (error, stdout, stderr) => {
+      if (error) {
+        console.error("Command failed:", cmd);
+        console.error("Error code:", error.code);
+
+        // Filter out known non-critical errors
+        const isCritical =
+          !stderr.includes("mail spool") && !stderr.includes("No directory");
+
+        if (isCritical) {
+          console.error("Stderr:", stderr);
+        }
+
+        reject(error);
       } else {
-        console.log("stdout");
-        resolve(stdout);
+        resolve(stdout.trim());
       }
     });
   });
 };
 
-// async function cg() {
-//   const cgroups = '/sys/fs/cgroup/';
-//   const enginePath = path.join(cgroups, 'engine');
-
-//   try {
-//     fs.mkdirSync(enginePath, { mode: 0o755 });
-//   } catch (err) {
-//     if (err.code !== 'EEXIST') {
-//       throw err;
-//     }
-//   }
-
-//   // Helper function for writing files
-//   function must(err) {
-//     if (err) {
-//       console.error(err)
-//     }
-//   }
-
-//   /* await execShellCommand("sudo touch /sys/fs/cgroup/engine/pids.max")
-//   await execShellCommand("sudo chmod 666 /sys/fs/cgroup/engine/pids.max") */
-//   must(fs.writeFileSync(path.join(enginePath, 'pids.max'), '10', { mode: 0o700 }));
-
-// }
-
-// Main function to create and configure cgroups
-async function cg(username) {
-  const cgroups = "/sys/fs/cgroup/pids";
-  const enginePath = path.join(cgroups, `engine_${username}`);
-
-  try {
-    // Create the directory for cgroups (with sudo)
-    await execShellCommand(`sudo mkdir -p ${enginePath}`);
-    await execShellCommand(`sudo chmod 755 ${enginePath}`);
-  } catch (err) {
-    console.error("Error creating or setting up the engine path:", err);
-  }
-
-  // Write to the cgroups file using sudo
-  try {
-    await execShellCommand(
-      `echo '40' | sudo tee ${path.join(enginePath, "pids.max")}`,
-    );
-    await execShellCommand(
-      `sudo chmod 666 ${path.join(enginePath, "pids.max")}`,
-    );
-    await execShellCommand(
-      `sudo chmod 666 ${path.join(enginePath, "cgroup.procs")}`,
-    );
-  } catch (err) {
-    console.error("Error writing to pids.max:", err);
-  }
-}
-const createUser = async (
-  username,
-  cpuLimit = "10000",
-  memoryLimit = "500M",
-) => {
+const createUser = async (username) => {
   await userCreationSemaphore.acquire();
   try {
-    const createUserCommand = `sudo useradd -m ${username} && echo '${username}:p' | sudo chpasswd`;
+    // Check if user already exists
+    try {
+      await execShellCommand(`id ${username} 2>/dev/null`);
+      console.log(`User ${username} already exists, cleaning up...`);
+      await execShellCommand(
+        `sudo pkill -9 -u ${username} 2>/dev/null || true`,
+      );
+      await execShellCommand(
+        `sudo userdel -r -f ${username} 2>/dev/null || true`,
+      );
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    } catch (e) {
+      // User doesn't exist, which is good
+    }
+
+    // Create user with home directory and bash shell
+    const createUserCommand = `sudo useradd -m -s /bin/bash ${username}`;
     await execShellCommand(createUserCommand);
+
     console.log(`User ${username} created successfully.`);
-
-    // // Get the user's shell process ID (PID)
-    // const pidCommand = `pgrep -u ${username} -n`; // Get the newest PID for the user
-    // const userPid = await execShellCommand(pidCommand);
-
-    // // Assign the user's process to the 'engine' cgroup
-    // const cgroupTasksFile = `/sys/fs/cgroup/pids/engine/cgroups.procs`;
-    // await execShellCommand(
-    //   `echo ${userPid.trim()} | sudo tee -a ${cgroupTasksFile}`
-    // );
-
-    // console.log(
-    //   `User ${username} (PID: ${userPid.trim()}) added to cgroup 'engine'.`
-    // );
   } catch (error) {
     console.error(`Error creating user ${username}:`, error.message);
     throw error;
@@ -131,29 +89,35 @@ const createUser = async (
 
 const deleteUser = async (username) => {
   await userCreationSemaphore.acquire();
-  const cgroups = "/sys/fs/cgroup/pids";
-  const enginePath = path.join(cgroups, `engine_${username}`);
   try {
-    const deleteCgroupCommand = `sudo rmdir ${enginePath}`;
-    await execShellCommand(deleteCgroupCommand);
-    console.log(
-      `Cgroup created for the user ${username} deleted successfully.`,
+    // Kill all processes owned by the user
+    await execShellCommand(`sudo pkill -9 -u ${username} 2>/dev/null || true`);
+
+    // Wait for processes to die
+    await new Promise((resolve) => setTimeout(resolve, 200));
+
+    // Force delete user and home directory, suppress mail spool errors
+    await execShellCommand(
+      `sudo userdel -r -f ${username} 2>&1 | grep -v "mail spool" || true`,
     );
 
-    const deleteUserCommand = `sudo userdel -r ${username}`;
-    await execShellCommand(deleteUserCommand);
     console.log(`User ${username} deleted successfully.`);
   } catch (error) {
-    console.error(`Error deleting user ${username}:`, error.message);
-    throw error;
+    // Don't log errors during cleanup
+    if (!error.message.includes("mail spool")) {
+      console.error(`Error deleting user ${username}:`, error.message);
+    }
   } finally {
     userCreationSemaphore.release();
   }
 };
 
 const killProcessGroup = async (pgid) => {
-  const killCommand = `sudo kill -TERM -${pgid}`; // Send SIGTERM to process group
-  await execShellCommand(killCommand);
+  try {
+    await execShellCommand(`sudo kill -9 -${pgid} 2>/dev/null || true`);
+  } catch (error) {
+    // Ignore errors
+  }
 };
 
 module.exports = {
@@ -161,5 +125,4 @@ module.exports = {
   createUser,
   deleteUser,
   killProcessGroup,
-  cg,
 };
