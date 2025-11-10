@@ -20,6 +20,8 @@ export const auth = betterAuth({
       clientId: process.env.GOOGLE_CLIENT_ID || "",
       clientSecret: process.env.GOOGLE_CLIENT_SECRET || "",
       enabled: !!process.env.GOOGLE_CLIENT_ID,
+      // ✅ Dynamic redirect URI for production
+      redirectURI: `${process.env.BASE_URL || "http://localhost:3000"}/api/auth/callback/google`,
     },
   },
   session: {
@@ -30,24 +32,15 @@ export const auth = betterAuth({
       maxAge: 5 * 60,
     },
   },
-  trustedOrigins: [
-    process.env.FRONTEND_URL || "http://localhost:5173",
-    "http://localhost:5173",
-  ],
+  trustedOrigins: [process.env.FRONTEND_URL, "http://localhost:5173"].filter(
+    Boolean,
+  ),
   baseURL: process.env.BASE_URL || "http://localhost:3000",
-  secret:
-    process.env.BETTER_AUTH_SECRET ||
-    "secret-key-min-32-characters-long-required",
-  // ✅ This is the key setting!
-  redirects: {
-    // After successful OAuth, redirect here
-    afterSignIn: `${process.env.FRONTEND_URL || "http://localhost:5173"}/dashboard`,
-    afterSignUp: `${process.env.FRONTEND_URL || "http://localhost:5173"}/dashboard`,
-    onError: `${process.env.FRONTEND_URL || "http://localhost:5173"}/auth/sign-in`,
-  },
+  secret: process.env.BETTER_AUTH_SECRET,
   advanced: {
-    cookieSameSite: "lax",
+    cookieSameSite: process.env.NODE_ENV === "production" ? "none" : "lax",
     cookieSecure: process.env.NODE_ENV === "production",
     clearSessionTokenOnSignOut: true,
+    useSecureCookies: process.env.NODE_ENV === "production",
   },
 });

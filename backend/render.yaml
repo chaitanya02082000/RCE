@@ -1,0 +1,29 @@
+services:
+  - type: web
+    name: code-executor-api
+    env: node
+    region: oregon
+    plan: free
+    buildCommand: npm install
+    startCommand: npm start
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: DATABASE_URL
+        sync: false
+      - key: BETTER_AUTH_SECRET
+        generateValue: true
+      - key: GOOGLE_CLIENT_ID
+        sync: false
+      - key: GOOGLE_CLIENT_SECRET
+        sync: false
+      - key: JUDGE0_API_URL
+        value: https://judge0-ce.p.rapidapi.com
+      - key: JUDGE0_API_KEY
+        sync: false
+      - key: JUDGE0_USE_RAPIDAPI
+        value: true
+      - key: FRONTEND_URL
+        sync: false
+      - key: BASE_URL
+        sync: false
