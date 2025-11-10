@@ -6,17 +6,18 @@ function App() {
   const [selectedLanguage, setSelectedLanguage] = useState("");
 
   return (
-    <div className="container mx-auto p-4">
-      <h1 className="text-2xl font-bold mb-4">Code Executor</h1>
-
-      <div className="mb-4">
+    <div className="container mx-auto p-4 h-screen flex flex-col">
+      <div className="flex items-center justify-between mb-4">
+        <h1 className="text-2xl font-bold">Code Executor</h1>
         <Combobox value={selectedLanguage} onChange={setSelectedLanguage} />
       </div>
 
-      <Code
-        prop="Enter your code here..."
-        selectedLanguage={selectedLanguage}
-      />
+      <div className="flex-1 flex flex-col min-h-0">
+        <Code
+          prop="Enter your code here..."
+          selectedLanguage={selectedLanguage}
+        />
+      </div>
     </div>
   );
 }

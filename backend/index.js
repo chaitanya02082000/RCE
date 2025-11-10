@@ -10,7 +10,6 @@ const {
 const app = express();
 const { v4: uuidv4 } = require("uuid");
 
-// CORS configuration
 app.use(
   cors({
     origin: "*",
@@ -49,13 +48,15 @@ app.post("/api/execute", async (req, res) => {
 
     await execShellCommand(`sudo -u ${execId} mkdir -p ${tempDir}`);
 
-    // Escape single quotes in code
     const escapedCode = code.replace(/'/g, "'\\''");
 
     let scriptContent = `#!/bin/bash
 `;
 
-    // Add language-specific execution logic
+    // Memory limits per language
+    let memoryLimit = "256M";
+    let cpuQuota = "100%"; // 100% of one CPU core
+
     switch (language.toLowerCase()) {
       case "java": {
         const className = "Main";
@@ -65,11 +66,11 @@ app.post("/api/execute", async (req, res) => {
           `echo '${escapedCode}' | sudo -u ${execId} tee ${javaFilePath} > /dev/null`,
         );
 
+        memoryLimit = "512M"; // Java needs more memory
         scriptContent += `
 ulimit -t 10
 ulimit -u 50
 ulimit -f 10240
-ulimit -s 8192
 cd ${tempDir}
 javac ${javaFilePath} 2>&1
 java -Xmx256m -Xms64m -cp ${tempDir} ${className} 2>&1
@@ -86,11 +87,11 @@ java -Xmx256m -Xms64m -cp ${tempDir} ${className} 2>&1
           `echo '${escapedCode}' | sudo -u ${execId} tee ${cppFilePath} > /dev/null`,
         );
 
+        memoryLimit = "256M";
         scriptContent += `
 ulimit -t 10
 ulimit -u 40
 ulimit -f 10240
-ulimit -s 8192
 cd ${tempDir}
 g++ -o ${executableFile} ${cppFilePath} 2>&1
 ${executableFile} 2>&1
@@ -106,14 +107,13 @@ ${executableFile} 2>&1
           `echo '${escapedCode}' | sudo -u ${execId} tee ${jsFilePath} > /dev/null`,
         );
 
-        // Node.js needs less restrictive limits
+        memoryLimit = "256M"; // Node.js memory limit
         scriptContent += `
 ulimit -t 10
 ulimit -u 40
 ulimit -f 10240
-ulimit -s 16384
 cd ${tempDir}
-/usr/bin/node --max-old-space-size=256 ${jsFilePath} 2>&1
+/usr/bin/node --max-old-space-size=200 ${jsFilePath} 2>&1
 `;
         break;
       }
@@ -126,11 +126,11 @@ cd ${tempDir}
           `echo '${escapedCode}' | sudo -u ${execId} tee ${pyFilePath} > /dev/null`,
         );
 
+        memoryLimit = "256M";
         scriptContent += `
 ulimit -t 10
 ulimit -u 40
 ulimit -f 10240
-ulimit -s 8192
 cd ${tempDir}
 /usr/bin/python3 ${pyFilePath} 2>&1
 `;
@@ -152,8 +152,18 @@ cd ${tempDir}
     );
     await execShellCommand(`sudo chmod +x ${scriptPath}`);
 
-    console.log("Executing script...");
-    const executeCommand = `sudo -u ${execId} bash ${scriptPath}`;
+    console.log("Executing script with systemd-run...");
+
+    // Use systemd-run for proper memory/CPU limits
+    const executeCommand = `sudo systemd-run \
+      --uid=${execId} \
+      --scope \
+      --slice=user.slice \
+      --property=MemoryMax=${memoryLimit} \
+      --property=MemoryHigh=${memoryLimit} \
+      --property=CPUQuota=${cpuQuota} \
+      --property=TasksMax=50 \
+      bash ${scriptPath}`;
 
     let output;
     try {
@@ -170,7 +180,6 @@ cd ${tempDir}
       console.error("Error code:", execError.code);
       console.error("Error output:", execError.output || execError.message);
 
-      // Check if it was killed by timeout
       if (execError.killed || execError.signal === "SIGKILL") {
         throw new Error(
           "Execution timeout: Your code took too long to execute (max 15 seconds)",
@@ -183,22 +192,19 @@ cd ${tempDir}
         );
       }
 
-      if (execError.code === 124) {
-        throw new Error(
-          "Execution timeout: Your code took too long to execute",
-        );
+      if (execError.output && execError.output.includes("memory")) {
+        throw new Error("Out of memory: Your code used too much memory");
       }
 
-      // Return the actual error output if available
       if (execError.output && execError.output.trim()) {
         const errorOutput = execError.output.trim();
-        // Filter out the bash line number info, just show the actual error
         const lines = errorOutput.split("\n");
         const relevantError = lines
           .filter(
             (line) =>
               !line.includes("execute.sh: line") &&
               !line.includes("core dumped") &&
+              !line.includes("Running scope") &&
               line.trim().length > 0,
           )
           .join("\n");
