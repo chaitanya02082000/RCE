@@ -1,33 +1,85 @@
-const express = require("express");
-const path = require("path");
-const cors = require("cors");
+import express from "express";
+import path from "path";
+import cors from "cors";
+import cookieParser from "cookie-parser"; // ✅ Add this
+import { createRequire } from "module";
+import { fileURLToPath } from "url";
+import { dirname } from "path";
+import { toNodeHandler } from "better-auth/node";
+import { auth } from "./auth.js";
+import { v4 as uuidv4 } from "uuid";
+import dotenv from "dotenv";
+
+dotenv.config();
+
+const require = createRequire(import.meta.url);
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
+
 const {
   execShellCommand,
   createUser,
   deleteUser,
   killProcessGroup,
-} = require("./utils");
-const app = express();
-const { v4: uuidv4 } = require("uuid");
+} = require("./utils.js");
 
+const app = express();
+
+// CORS
 app.use(
   cors({
-    origin: "*",
-    methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-    allowedHeaders: ["Content-Type", "Authorization"],
+    origin: process.env.FRONTEND_URL || "http://localhost:5173",
     credentials: true,
+    methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"],
+    allowedHeaders: ["Content-Type", "Authorization", "Cookie"],
+    exposedHeaders: ["Set-Cookie"],
   }),
 );
 
-app.use(express.json());
+// ✅ Add cookie parser
+app.use(cookieParser());
 
+// Debug middleware
+app.use((req, res, next) => {
+  console.log(`📨 ${req.method} ${req.url}`);
+  if (req.url.includes("callback")) {
+    console.log("Query params:", req.query);
+  }
+  next();
+});
+
+// Better Auth routes
+app.all("/api/auth/*", toNodeHandler(auth));
+
+// ✅ Redirect handler for dashboard
+app.get("/dashboard", (req, res) => {
+  const frontendUrl = process.env.FRONTEND_URL || "http://localhost:5173";
+  console.log(
+    "🔄 Redirecting /dashboard to frontend:",
+    frontendUrl + "/dashboard",
+  );
+  res.redirect(frontendUrl + "/dashboard");
+});
+
+// Root endpoint
 app.get("/", (req, res) => {
+  // Check if user has session cookie
+  if (req.cookies && req.cookies["better-auth.session_token"]) {
+    const frontendUrl = process.env.FRONTEND_URL || "http://localhost:5173";
+    console.log("🔄 User has session, redirecting to frontend dashboard");
+    return res.redirect(frontendUrl + "/dashboard");
+  }
+
   res.json({
     status: "Server is running",
     timestamp: new Date().toISOString(),
+    database: process.env.DATABASE_URL ? "Connected" : "Not configured",
   });
 });
 
+app.use(express.json());
+
+// Your existing /api/execute endpoint
 app.post("/api/execute", async (req, res) => {
   console.log("\n=== NEW EXECUTION REQUEST ===");
   console.log("Language:", req.body.language);
@@ -39,7 +91,7 @@ app.post("/api/execute", async (req, res) => {
     return res.status(400).json({ error: "Code and language are required" });
   }
 
-  const execId = `exec_${uuidv4()}`;
+  const execId = `exec_${uuidv4().replace(/-/g, "")}`;
 
   try {
     await createUser(execId);
@@ -49,24 +101,18 @@ app.post("/api/execute", async (req, res) => {
     await execShellCommand(`sudo -u ${execId} mkdir -p ${tempDir}`);
 
     const escapedCode = code.replace(/'/g, "'\\''");
-
-    let scriptContent = `#!/bin/bash
-`;
-
-    // Memory limits per language
+    let scriptContent = `#!/bin/bash\n`;
     let memoryLimit = "256M";
-    let cpuQuota = "100%"; // 100% of one CPU core
+    let cpuQuota = "100%";
 
     switch (language.toLowerCase()) {
       case "java": {
         const className = "Main";
         const javaFilePath = path.join(tempDir, `${className}.java`);
-
         await execShellCommand(
           `echo '${escapedCode}' | sudo -u ${execId} tee ${javaFilePath} > /dev/null`,
         );
-
-        memoryLimit = "512M"; // Java needs more memory
+        memoryLimit = "512M";
         scriptContent += `
 ulimit -t 10
 ulimit -u 50
@@ -82,11 +128,9 @@ java -Xmx256m -Xms64m -cp ${tempDir} ${className} 2>&1
       case "c++": {
         const cppFilePath = path.join(tempDir, "program.cpp");
         const executableFile = path.join(tempDir, "program");
-
         await execShellCommand(
           `echo '${escapedCode}' | sudo -u ${execId} tee ${cppFilePath} > /dev/null`,
         );
-
         memoryLimit = "256M";
         scriptContent += `
 ulimit -t 10
@@ -102,12 +146,9 @@ ${executableFile} 2>&1
       case "javascript":
       case "js": {
         const jsFilePath = path.join(tempDir, "script.js");
-
         await execShellCommand(
           `echo '${escapedCode}' | sudo -u ${execId} tee ${jsFilePath} > /dev/null`,
         );
-
-        memoryLimit = "256M"; // Node.js memory limit
         scriptContent += `
 ulimit -t 10
 ulimit -u 40
@@ -121,12 +162,9 @@ cd ${tempDir}
       case "python3":
       case "python": {
         const pyFilePath = path.join(tempDir, "script.py");
-
         await execShellCommand(
           `echo '${escapedCode}' | sudo -u ${execId} tee ${pyFilePath} > /dev/null`,
         );
-
-        memoryLimit = "256M";
         scriptContent += `
 ulimit -t 10
 ulimit -u 40
@@ -143,7 +181,6 @@ cd ${tempDir}
           .json({ error: `Unsupported language: ${language}` });
     }
 
-    // Write the script to a file
     const scriptPath = path.join(tempDir, "execute.sh");
     const escapedScript = scriptContent.replace(/'/g, "'\\''");
 
@@ -154,7 +191,6 @@ cd ${tempDir}
 
     console.log("Executing script with systemd-run...");
 
-    // Use systemd-run for proper memory/CPU limits
     const executeCommand = `sudo systemd-run \
       --uid=${execId} \
       --scope \
@@ -223,7 +259,6 @@ cd ${tempDir}
     });
   } catch (error) {
     console.error("Final error:", error.message);
-
     res.status(500).json({
       error: error.message || "An error occurred during code execution",
     });
@@ -238,6 +273,12 @@ cd ${tempDir}
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, "0.0.0.0", () => {
-  console.log(`Server running on http://localhost:${PORT}`);
-  console.log(`CORS enabled for all origins`);
+  console.log(`🚀 Server running on http://localhost:${PORT}`);
+  console.log(
+    `🌐 CORS enabled for: ${process.env.FRONTEND_URL || "http://localhost:5173"}`,
+  );
+  console.log(`🔐 Auth endpoints: http://localhost:${PORT}/api/auth/*`);
+  console.log(
+    `📊 Database: ${process.env.DATABASE_URL ? "✅ Connected" : "❌ Not configured"}`,
+  );
 });

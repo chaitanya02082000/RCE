@@ -1,4 +1,4 @@
-const { exec } = require("child_process");
+import { exec } from "child_process";
 
 class Semaphore {
   constructor(max) {
@@ -27,7 +27,7 @@ class Semaphore {
 
 const userCreationSemaphore = new Semaphore(1);
 
-const execShellCommand = (cmd, options = {}) => {
+export const execShellCommand = (cmd, options = {}) => {
   return new Promise((resolve, reject) => {
     const defaultOptions = {
       timeout: 20000,
@@ -56,7 +56,7 @@ const execShellCommand = (cmd, options = {}) => {
   });
 };
 
-const createUser = async (username) => {
+export const createUser = async (username) => {
   await userCreationSemaphore.acquire();
   try {
     // Check if user already exists
@@ -70,8 +70,8 @@ const createUser = async (username) => {
         `sudo userdel -r -f ${username} 2>/dev/null || true`,
       );
       await new Promise((resolve) => setTimeout(resolve, 100));
-    } catch (e) {
-      // User doesn't exist, which is good
+    } catch {
+      // User doesn't exist, which is fine
     }
 
     // Create user with home directory and bash shell
@@ -87,13 +87,13 @@ const createUser = async (username) => {
   }
 };
 
-const deleteUser = async (username) => {
+export const deleteUser = async (username) => {
   await userCreationSemaphore.acquire();
   try {
     // Kill all processes owned by the user
     await execShellCommand(`sudo pkill -9 -u ${username} 2>/dev/null || true`);
 
-    // Wait for processes to die
+    // Wait for processes to terminate
     await new Promise((resolve) => setTimeout(resolve, 200));
 
     // Force delete user and home directory, suppress mail spool errors
@@ -103,7 +103,6 @@ const deleteUser = async (username) => {
 
     console.log(`User ${username} deleted successfully.`);
   } catch (error) {
-    // Don't log errors during cleanup
     if (!error.message.includes("mail spool")) {
       console.error(`Error deleting user ${username}:`, error.message);
     }
@@ -112,17 +111,10 @@ const deleteUser = async (username) => {
   }
 };
 
-const killProcessGroup = async (pgid) => {
+export const killProcessGroup = async (pgid) => {
   try {
     await execShellCommand(`sudo kill -9 -${pgid} 2>/dev/null || true`);
-  } catch (error) {
-    // Ignore errors
+  } catch {
+    // Ignore errors silently
   }
-};
-
-module.exports = {
-  execShellCommand,
-  createUser,
-  deleteUser,
-  killProcessGroup,
 };
