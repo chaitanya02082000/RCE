@@ -4,7 +4,8 @@ import AuthPage from "./pages/auth/AuthPage";
 import HomePage from "./pages/HomePage.jsx";
 import SnippetsPage from "./pages/SnippetsPage.jsx";
 import { useSession } from "@/lib/auth-client";
-import React, { useEffect } from "react";
+import { getStoredSession } from "@/lib/auth-wrapper";
+import React, { useEffect, useState } from "react";
 
 function App() {
   return (
@@ -14,108 +15,124 @@ function App() {
         <Route path="/auth/:pathname" element={<AuthRoute />} />
         <Route path="/dashboard" element={<ProtectedDashboard />} />
         <Route path="/snippets" element={<ProtectedSnippets />} />
-        <Route
-          path="/api/auth/callback/:provider"
-          element={<OAuthCallback />}
-        />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
     </ThemeProvider>
   );
 }
 
-// ✅ Root route - check session and redirect
+// ✅ Root route with localStorage fallback
 function RootRoute() {
   const { data: session, isPending } = useSession();
+  const [storedSession, setStoredSession] = useState(null);
 
   useEffect(() => {
-    console.log("🏠 RootRoute - Session:", !!session, "Pending:", isPending);
-  }, [session, isPending]);
+    const stored = getStoredSession();
+    setStoredSession(stored);
+    console.log(
+      "🏠 RootRoute - Cookie Session:",
+      !!session,
+      "Stored Session:",
+      !!stored,
+    );
+  }, [session]);
 
   if (isPending) {
     return <LoadingScreen />;
   }
 
-  // If logged in, go to dashboard, otherwise go to sign-up
-  return session ? (
+  // Check both cookie session and stored session
+  const hasSession = session || storedSession;
+
+  return hasSession ? (
     <Navigate to="/dashboard" replace />
   ) : (
-    <Navigate to="/auth/sign-up" replace />
+    <Navigate to="/auth/sign-in" replace />
   );
 }
 
-// ✅ Auth route - redirect to dashboard if already logged in
+// ✅ Auth route - redirect if logged in
 function AuthRoute() {
   const { data: session, isPending } = useSession();
+  const [storedSession, setStoredSession] = useState(null);
 
   useEffect(() => {
-    console.log("🔐 AuthRoute - Session:", !!session, "Pending:", isPending);
-  }, [session, isPending]);
+    const stored = getStoredSession();
+    setStoredSession(stored);
+    console.log(
+      "🔐 AuthRoute - Cookie Session:",
+      !!session,
+      "Stored Session:",
+      !!stored,
+    );
+
+    // If we have a stored session, redirect to dashboard
+    if (stored && !session) {
+      console.log("✅ Found stored session, redirecting to dashboard");
+      window.location.href = "/dashboard";
+    }
+  }, [session]);
 
   if (isPending) {
     return <LoadingScreen message="Checking authentication..." />;
   }
 
-  // ✅ If already logged in, redirect to dashboard
-  if (session) {
-    console.log("✅ Already logged in, redirecting to dashboard");
+  const hasSession = session || storedSession;
+
+  if (hasSession) {
     return <Navigate to="/dashboard" replace />;
   }
 
-  // Otherwise show auth page
   return <AuthPage />;
 }
 
-// OAuth Callback Handler
-function OAuthCallback() {
-  const { data: session, isPending, error } = useSession();
-
-  useEffect(() => {
-    console.log("OAuth Callback - Session:", !!session, "Pending:", isPending);
-
-    if (!isPending && session) {
-      console.log("✅ OAuth successful, redirecting to dashboard");
-      window.location.href = "/dashboard";
-    }
-
-    if (!isPending && !session && error) {
-      console.log("❌ OAuth failed, redirecting to sign in");
-      window.location.href = "/auth/sign-in";
-    }
-  }, [session, isPending, error]);
-
-  return <LoadingScreen message="Completing authentication..." />;
-}
-
-// Protected Dashboard
+// ✅ Protected Dashboard with fallback
 function ProtectedDashboard() {
   const { data: session, isPending } = useSession();
+  const [storedSession, setStoredSession] = useState(null);
 
   useEffect(() => {
-    console.log("📊 Dashboard - Session:", !!session, "Pending:", isPending);
-  }, [session, isPending]);
+    const stored = getStoredSession();
+    setStoredSession(stored);
+    console.log(
+      "📊 Dashboard - Cookie Session:",
+      !!session,
+      "Stored Session:",
+      !!stored,
+    );
+  }, [session]);
 
   if (isPending) {
     return <LoadingScreen message="Loading dashboard..." />;
   }
 
-  if (!session) {
-    console.log("❌ No session, redirecting to sign-in");
+  const hasSession = session || storedSession;
+
+  if (!hasSession) {
+    console.log("❌ No session found, redirecting to sign-in");
     return <Navigate to="/auth/sign-in" replace />;
   }
 
   return <HomePage />;
 }
 
-// Protected Snippets Page
+// ✅ Protected Snippets with fallback
 function ProtectedSnippets() {
   const { data: session, isPending } = useSession();
+  const [storedSession, setStoredSession] = useState(null);
+
+  useEffect(() => {
+    const stored = getStoredSession();
+    setStoredSession(stored);
+  }, [session]);
 
   if (isPending) {
     return <LoadingScreen />;
   }
 
-  if (!session) {
+  const hasSession = session || storedSession;
+
+  if (!hasSession) {
     return <Navigate to="/auth/sign-in" replace />;
   }
 

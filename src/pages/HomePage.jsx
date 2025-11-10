@@ -3,19 +3,23 @@ import { useLocation, useNavigate } from "react-router-dom";
 import { Code } from "@/comp/code";
 import { Combobox } from "@/comp/dropdown";
 import { ModeToggle } from "@/comp/mode-toggle";
-import { UserButton } from "@daveyplate/better-auth-ui";
-import { useSession, handleSignOut } from "@/lib/auth-client";
 import { Button } from "@/components/ui/button";
 import { LogOut, BookOpen } from "lucide-react";
+import { useSession } from "@/lib/auth-client";
+import { getStoredSession, signOutUser } from "@/lib/auth-wrapper";
 
 export default function HomePage() {
   const [selectedLanguage, setSelectedLanguage] = useState("");
   const [loadedSnippet, setLoadedSnippet] = useState(null);
   const { data: session } = useSession();
+  const storedSession = getStoredSession();
   const navigate = useNavigate();
   const location = useLocation();
 
-  // Load snippet if passed via navigation state
+  // Use either cookie session or stored session
+  const currentSession = session || storedSession;
+  const user = currentSession?.user;
+
   useEffect(() => {
     if (location.state?.snippet) {
       const snippet = location.state.snippet;
@@ -24,34 +28,28 @@ export default function HomePage() {
     }
   }, [location.state]);
 
-  const onSignOut = () => {
-    handleSignOut(navigate);
-  };
-
   return (
     <div className="container mx-auto p-4 h-screen flex flex-col">
       <div className="flex items-center justify-between mb-4">
         <div>
           <h1 className="text-2xl font-bold">Code Executor</h1>
-          {session?.user && (
+          {user && (
             <p className="text-sm text-muted-foreground">
-              Welcome back, {session.user.name || session.user.email}!
+              Welcome back, {user.name || user.email}!
             </p>
           )}
         </div>
         <div className="flex items-center gap-3">
-          {/* ✅ View Snippets Button */}
           <Button variant="outline" onClick={() => navigate("/snippets")}>
             <BookOpen className="mr-2 h-4 w-4" />
             My Snippets
           </Button>
           <Combobox value={selectedLanguage} onChange={setSelectedLanguage} />
           <ModeToggle />
-          <UserButton size="icon" />
           <Button
             variant="outline"
             size="icon"
-            onClick={onSignOut}
+            onClick={signOutUser}
             title="Sign Out"
           >
             <LogOut className="h-4 w-4" />
