@@ -4,7 +4,7 @@ import { AuthView } from "@daveyplate/better-auth-ui";
 export default function AuthPage() {
   const { pathname } = useParams();
 
-  console.log("AuthPage pathname:", pathname); // Debug log
+  console.log("📄 AuthPage - pathname:", pathname);
 
   return (
     <div className="min-h-screen flex items-center justify-center bg-background">

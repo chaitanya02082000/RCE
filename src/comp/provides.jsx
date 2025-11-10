@@ -17,10 +17,11 @@ export function Providers({ children }) {
         navigate(href, { replace: true });
       }}
       onSessionChange={() => {
-        console.log("📡 Session changed");
+        console.log("📡 Session changed - reloading session");
       }}
       Link={NavLink}
       basePath="/auth"
+      // ✅ Critical: Where to redirect after successful auth
       redirectTo="/dashboard"
       social={{
         providers: ["google"],
@@ -32,8 +33,6 @@ export function Providers({ children }) {
         fields: ["name"],
       }}
       nameRequired={true}
-      // ✅ Add callback URL
-      baseURL="http://localhost:3000"
     >
       {children}
     </AuthUIProvider>
