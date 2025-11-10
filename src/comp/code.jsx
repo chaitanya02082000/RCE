@@ -1,5 +1,5 @@
 import "../index.css";
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { Textarea } from "@/components/ui/textarea";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -8,13 +8,25 @@ import { createSnippet, updateSnippet } from "../services/snippetService";
 import { Save, Play } from "lucide-react";
 import { toast } from "sonner";
 
-export const Code = ({ prop, selectedLanguage, snippetId = null }) => {
-  const [message, setMessage] = useState("");
+export const Code = ({
+  prop,
+  selectedLanguage,
+  snippetId = null,
+  initialCode = "",
+  initialTitle = "",
+}) => {
+  const [message, setMessage] = useState(initialCode);
   const [output, setOutput] = useState("");
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
-  const [title, setTitle] = useState("");
+  const [title, setTitle] = useState(initialTitle);
+
+  // Update code and title when initial values change
+  useEffect(() => {
+    setMessage(initialCode);
+    setTitle(initialTitle);
+  }, [initialCode, initialTitle]);
 
   const handleMessageChange = (e) => {
     setMessage(e.target.value);
@@ -82,9 +94,8 @@ export const Code = ({ prop, selectedLanguage, snippetId = null }) => {
       } else {
         await createSnippet(snippetData);
         toast.success("Snippet saved successfully!");
+        setTitle(""); // Clear title after saving new snippet
       }
-
-      setTitle("");
     } catch (err) {
       console.error("Error saving snippet:", err);
       toast.error("Failed to save snippet");
@@ -100,7 +111,7 @@ export const Code = ({ prop, selectedLanguage, snippetId = null }) => {
         <div className="flex gap-2 items-end">
           <div className="flex-1">
             <Input
-              placeholder="Snippet title (optional - for saving)"
+              placeholder="Snippet title (required for saving)"
               value={title}
               onChange={(e) => setTitle(e.target.value)}
               className="w-full"
@@ -110,7 +121,9 @@ export const Code = ({ prop, selectedLanguage, snippetId = null }) => {
             type="button"
             variant="outline"
             onClick={handleSaveSnippet}
-            disabled={saving || !message.trim() || !selectedLanguage}
+            disabled={
+              saving || !message.trim() || !selectedLanguage || !title.trim()
+            }
           >
             <Save className="mr-2 h-4 w-4" />
             {saving ? "Saving..." : snippetId ? "Update" : "Save"}

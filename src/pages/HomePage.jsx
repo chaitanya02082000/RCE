@@ -1,17 +1,28 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
+import { useLocation, useNavigate } from "react-router-dom";
 import { Code } from "@/comp/code";
 import { Combobox } from "@/comp/dropdown";
 import { ModeToggle } from "@/comp/mode-toggle";
 import { UserButton } from "@daveyplate/better-auth-ui";
 import { useSession, handleSignOut } from "@/lib/auth-client";
 import { Button } from "@/components/ui/button";
-import { LogOut } from "lucide-react";
-import { useNavigate } from "react-router-dom";
+import { LogOut, BookOpen } from "lucide-react";
 
 export default function HomePage() {
   const [selectedLanguage, setSelectedLanguage] = useState("");
+  const [loadedSnippet, setLoadedSnippet] = useState(null);
   const { data: session } = useSession();
   const navigate = useNavigate();
+  const location = useLocation();
+
+  // Load snippet if passed via navigation state
+  useEffect(() => {
+    if (location.state?.snippet) {
+      const snippet = location.state.snippet;
+      setLoadedSnippet(snippet);
+      setSelectedLanguage(snippet.language);
+    }
+  }, [location.state]);
 
   const onSignOut = () => {
     handleSignOut(navigate);
@@ -29,10 +40,14 @@ export default function HomePage() {
           )}
         </div>
         <div className="flex items-center gap-3">
+          {/* ✅ View Snippets Button */}
+          <Button variant="outline" onClick={() => navigate("/snippets")}>
+            <BookOpen className="mr-2 h-4 w-4" />
+            My Snippets
+          </Button>
           <Combobox value={selectedLanguage} onChange={setSelectedLanguage} />
           <ModeToggle />
           <UserButton size="icon" />
-          {/* ✅ Manual sign out button for testing */}
           <Button
             variant="outline"
             size="icon"
@@ -47,6 +62,9 @@ export default function HomePage() {
         <Code
           prop="Enter your code here..."
           selectedLanguage={selectedLanguage}
+          snippetId={loadedSnippet?.id}
+          initialCode={loadedSnippet?.code}
+          initialTitle={loadedSnippet?.title}
         />
       </div>
     </div>
