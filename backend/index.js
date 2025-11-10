@@ -11,8 +11,9 @@ dotenv.config();
 
 const app = express();
 
-// ✅ Production-ready CORS with explicit origin
 const FRONTEND_URL = process.env.FRONTEND_URL || "http://localhost:5173";
+const IS_PRODUCTION = process.env.NODE_ENV === "production";
+
 const allowedOrigins = [
   FRONTEND_URL,
   "http://localhost:5173",
@@ -25,10 +26,8 @@ console.log("🌐 CORS allowed origins:", allowedOrigins);
 app.use(
   cors({
     origin: function (origin, callback) {
-      // Allow requests with no origin (mobile apps, curl, Postman)
       if (!origin) return callback(null, true);
 
-      // Check if origin is allowed
       const isAllowed = allowedOrigins.some(
         (allowed) => origin === allowed || origin.startsWith(allowed),
       );
@@ -40,7 +39,7 @@ app.use(
         callback(new Error("Not allowed by CORS"));
       }
     },
-    credentials: true, // CRITICAL: Must be true for cookies
+    credentials: true,
     methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"],
     allowedHeaders: [
       "Content-Type",
@@ -50,29 +49,67 @@ app.use(
       "Accept",
     ],
     exposedHeaders: ["Set-Cookie"],
-    maxAge: 86400, // 24 hours
+    maxAge: 86400,
   }),
 );
 
-// ✅ Handle preflight requests explicitly
 app.options("*", cors());
 
 app.use(cookieParser());
 
-// ✅ Trust proxy for production (Render/Netlify use proxies)
 app.set("trust proxy", 1);
 
-// Request logging
-if (process.env.NODE_ENV !== "production") {
+// ✅ Middleware to fix cookie attributes
+if (IS_PRODUCTION) {
   app.use((req, res, next) => {
+    const originalSetHeader = res.setHeader.bind(res);
+
+    res.setHeader = function (name, value) {
+      if (name.toLowerCase() === "set-cookie") {
+        if (Array.isArray(value)) {
+          value = value.map((cookie) => fixCookie(cookie));
+        } else {
+          value = fixCookie(value);
+        }
+      }
+      return originalSetHeader(name, value);
+    };
+
+    next();
+  });
+}
+
+function fixCookie(cookie) {
+  if (typeof cookie !== "string") return cookie;
+
+  // Remove __Secure- prefix that's causing issues
+  cookie = cookie.replace("__Secure-better-auth", "better-auth");
+
+  // Ensure SameSite=None and Secure for production
+  if (IS_PRODUCTION) {
+    // Remove existing SameSite
+    cookie = cookie.replace(/;\s*SameSite=(Lax|Strict|None)/gi, "");
+    // Remove existing Secure
+    cookie = cookie.replace(/;\s*Secure/gi, "");
+
+    // Add correct attributes
+    cookie += "; SameSite=None; Secure";
+  }
+
+  return cookie;
+}
+
+// Request logging
+app.use((req, res, next) => {
+  if (process.env.NODE_ENV !== "production" || req.url.includes("auth")) {
     console.log(`📨 ${req.method} ${req.url}`);
     if (req.url.includes("auth")) {
       console.log("   Origin:", req.headers.origin);
       console.log("   Cookies:", Object.keys(req.cookies).join(", ") || "none");
     }
-    next();
-  });
-}
+  }
+  next();
+});
 
 // Health check
 app.get("/health", (req, res) => {
@@ -109,12 +146,6 @@ app.get("/", (req, res) => {
     version: "1.0.0",
     timestamp: new Date().toISOString(),
     environment: process.env.NODE_ENV || "development",
-    endpoints: {
-      auth: "/api/auth/*",
-      execute: "/api/execute",
-      snippets: "/api/snippets",
-      health: "/health",
-    },
   });
 });
 
@@ -188,9 +219,13 @@ app.get("/api/auth-config", (req, res) => {
     frontendURL: process.env.FRONTEND_URL,
     googleCallbackURL: `${process.env.BASE_URL}/api/auth/callback/google`,
     environment: process.env.NODE_ENV,
+    isProduction: IS_PRODUCTION,
+    cookieSettings: {
+      sameSite: IS_PRODUCTION ? "none" : "lax",
+      secure: IS_PRODUCTION,
+    },
     hasGoogleClientId: !!process.env.GOOGLE_CLIENT_ID,
     hasGoogleSecret: !!process.env.GOOGLE_CLIENT_SECRET,
-    trustProxy: app.get("trust proxy"),
   });
 });
 
@@ -199,7 +234,6 @@ app.use((req, res) => {
   res.status(404).json({
     error: "Not found",
     path: req.path,
-    timestamp: new Date().toISOString(),
   });
 });
 
@@ -208,11 +242,7 @@ app.use((err, req, res, next) => {
   console.error("Error:", err);
 
   res.status(err.status || 500).json({
-    error:
-      process.env.NODE_ENV === "production"
-        ? "An unexpected error occurred"
-        : err.message,
-    timestamp: new Date().toISOString(),
+    error: IS_PRODUCTION ? "An unexpected error occurred" : err.message,
   });
 });
 
@@ -222,10 +252,7 @@ const HOST = process.env.HOST || "0.0.0.0";
 app.listen(Number(PORT), HOST, () => {
   console.log(`🚀 Server running on http://${HOST}:${PORT}`);
   console.log(`📝 Environment: ${process.env.NODE_ENV || "development"}`);
-  console.log(`🌐 CORS enabled for: ${FRONTEND_URL}`);
-  console.log(`🔐 Auth endpoints: /api/auth/*`);
-  console.log(`📝 Snippet endpoints: /api/snippets`);
-  console.log(
-    `⚖️  Judge0 API: ${process.env.JUDGE0_API_URL || "Not configured"}`,
-  );
+  console.log(`🌐 Frontend: ${FRONTEND_URL}`);
+  console.log(`🍪 Cookie SameSite: ${IS_PRODUCTION ? "none" : "lax"}`);
+  console.log(`🔒 Cookie Secure: ${IS_PRODUCTION}`);
 });

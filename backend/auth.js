@@ -12,7 +12,13 @@ const IS_PRODUCTION = process.env.NODE_ENV === "production";
 console.log("🔐 Auth Configuration:");
 console.log("   BASE_URL:", BASE_URL);
 console.log("   FRONTEND_URL:", FRONTEND_URL);
-console.log("   Environment:", IS_PRODUCTION ? "production" : "development");
+console.log("   IS_PRODUCTION:", IS_PRODUCTION);
+console.log(
+  "   Cookie Settings: SameSite=",
+  IS_PRODUCTION ? "none" : "lax",
+  "Secure=",
+  IS_PRODUCTION,
+);
 
 export const auth = betterAuth({
   database: drizzleAdapter(db, {
@@ -48,19 +54,44 @@ export const auth = betterAuth({
   ].filter(Boolean),
   baseURL: BASE_URL,
   secret: process.env.BETTER_AUTH_SECRET,
-  // ✅ CRITICAL: Fix cookie settings for cross-domain
+  // ✅ CRITICAL: Fix cookie configuration for cross-domain
   advanced: {
-    // SameSite=None required for cross-domain cookies
+    // Force SameSite=None for production (cross-domain)
     cookieSameSite: IS_PRODUCTION ? "none" : "lax",
-    // Secure=true required when SameSite=None
+    // Secure must be true when SameSite=None
     cookieSecure: IS_PRODUCTION,
-    // Use secure cookies in production
+    // Use secure cookies with __Secure- prefix
     useSecureCookies: IS_PRODUCTION,
     // Clear tokens on sign out
     clearSessionTokenOnSignOut: true,
-    // ✅ Add cross-origin settings
-    crossSubdomainCookie: false,
-    // ✅ Disable CSRF for cross-domain (be careful!)
+    // ✅ Disable CSRF check for cross-domain
     disableCSRFCheck: IS_PRODUCTION,
+    // ✅ Don't use cross-subdomain cookies
+    crossSubdomainCookie: false,
   },
+  // ✅ Override cookie options directly
+  cookies: IS_PRODUCTION
+    ? {
+        sessionToken: {
+          name: "better-auth.session_token",
+          options: {
+            httpOnly: true,
+            sameSite: "none",
+            secure: true,
+            path: "/",
+            maxAge: 60 * 60 * 24 * 7, // 7 days
+          },
+        },
+        sessionData: {
+          name: "better-auth.session_data",
+          options: {
+            httpOnly: false,
+            sameSite: "none",
+            secure: true,
+            path: "/",
+            maxAge: 60 * 60 * 24 * 7,
+          },
+        },
+      }
+    : undefined,
 });
