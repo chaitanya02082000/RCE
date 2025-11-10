@@ -11,46 +11,70 @@ dotenv.config();
 
 const app = express();
 
-// ✅ Production-ready CORS
+// ✅ Production-ready CORS with explicit origin
+const FRONTEND_URL = process.env.FRONTEND_URL || "http://localhost:5173";
 const allowedOrigins = [
-  process.env.FRONTEND_URL,
+  FRONTEND_URL,
   "http://localhost:5173",
   "http://localhost:3000",
+  process.env.BASE_URL,
 ].filter(Boolean);
+
+console.log("🌐 CORS allowed origins:", allowedOrigins);
 
 app.use(
   cors({
-    origin: (origin, callback) => {
-      // Allow requests with no origin (mobile apps, Postman, etc.)
+    origin: function (origin, callback) {
+      // Allow requests with no origin (mobile apps, curl, Postman)
       if (!origin) return callback(null, true);
 
-      if (allowedOrigins.some((allowed) => origin.startsWith(allowed))) {
+      // Check if origin is allowed
+      const isAllowed = allowedOrigins.some(
+        (allowed) => origin === allowed || origin.startsWith(allowed),
+      );
+
+      if (isAllowed) {
         callback(null, true);
       } else {
+        console.warn("❌ CORS blocked origin:", origin);
         callback(new Error("Not allowed by CORS"));
       }
     },
-    credentials: true,
+    credentials: true, // CRITICAL: Must be true for cookies
     methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"],
-    allowedHeaders: ["Content-Type", "Authorization", "Cookie"],
+    allowedHeaders: [
+      "Content-Type",
+      "Authorization",
+      "Cookie",
+      "X-Requested-With",
+      "Accept",
+    ],
     exposedHeaders: ["Set-Cookie"],
+    maxAge: 86400, // 24 hours
   }),
 );
 
+// ✅ Handle preflight requests explicitly
+app.options("*", cors());
+
 app.use(cookieParser());
 
-// ✅ Trust proxy for production (Render uses proxies)
+// ✅ Trust proxy for production (Render/Netlify use proxies)
 app.set("trust proxy", 1);
 
-// Request logging (only in dev)
+// Request logging
 if (process.env.NODE_ENV !== "production") {
   app.use((req, res, next) => {
     console.log(`📨 ${req.method} ${req.url}`);
+    if (req.url.includes("auth")) {
+      console.log("   Origin:", req.headers.origin);
+      console.log("   Cookies:", Object.keys(req.cookies).join(", ") || "none");
+    }
     next();
   });
 }
 
-// Health check endpoint
+// Health check
 app.get("/health", (req, res) => {
   res.json({
     status: "healthy",
@@ -71,15 +95,13 @@ app.use("/api/snippets", snippetRoutes);
 
 // Redirect dashboard to frontend
 app.get("/dashboard", (req, res) => {
-  const frontendUrl = process.env.FRONTEND_URL || "http://localhost:5173";
-  res.redirect(frontendUrl + "/dashboard");
+  res.redirect(FRONTEND_URL + "/dashboard");
 });
 
 // Root endpoint
 app.get("/", (req, res) => {
   if (req.cookies && req.cookies["better-auth.session_token"]) {
-    const frontendUrl = process.env.FRONTEND_URL || "http://localhost:5173";
-    return res.redirect(frontendUrl + "/dashboard");
+    return res.redirect(FRONTEND_URL + "/dashboard");
   }
 
   res.json({
@@ -159,6 +181,19 @@ app.get("/api/test-judge0", async (req, res) => {
   }
 });
 
+// Debug auth config
+app.get("/api/auth-config", (req, res) => {
+  res.json({
+    baseURL: process.env.BASE_URL,
+    frontendURL: process.env.FRONTEND_URL,
+    googleCallbackURL: `${process.env.BASE_URL}/api/auth/callback/google`,
+    environment: process.env.NODE_ENV,
+    hasGoogleClientId: !!process.env.GOOGLE_CLIENT_ID,
+    hasGoogleSecret: !!process.env.GOOGLE_CLIENT_SECRET,
+    trustProxy: app.get("trust proxy"),
+  });
+});
+
 // 404 handler
 app.use((req, res) => {
   res.status(404).json({
@@ -187,9 +222,7 @@ const HOST = process.env.HOST || "0.0.0.0";
 app.listen(Number(PORT), HOST, () => {
   console.log(`🚀 Server running on http://${HOST}:${PORT}`);
   console.log(`📝 Environment: ${process.env.NODE_ENV || "development"}`);
-  console.log(
-    `🌐 CORS enabled for: ${process.env.FRONTEND_URL || "all origins"}`,
-  );
+  console.log(`🌐 CORS enabled for: ${FRONTEND_URL}`);
   console.log(`🔐 Auth endpoints: /api/auth/*`);
   console.log(`📝 Snippet endpoints: /api/snippets`);
   console.log(
