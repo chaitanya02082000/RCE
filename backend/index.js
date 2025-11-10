@@ -29,15 +29,10 @@ app.get("/", (req, res) => {
   });
 });
 
-app.get("/api/test", (req, res) => {
-  res.json({ message: "CORS is working!" });
-});
-
 app.post("/api/execute", async (req, res) => {
-  console.log("Received execution request:", {
-    language: req.body.language,
-    codeLength: req.body.code?.length,
-  });
+  console.log("\n=== NEW EXECUTION REQUEST ===");
+  console.log("Language:", req.body.language);
+  console.log("Code:", req.body.code);
 
   const { code, language } = req.body;
 
@@ -57,12 +52,10 @@ app.post("/api/execute", async (req, res) => {
     // Escape single quotes in code
     const escapedCode = code.replace(/'/g, "'\\''");
 
-    // Different limits for different languages
     let scriptContent = `#!/bin/bash
-set -e
 `;
 
-    // Add language-specific execution logic with appropriate limits
+    // Add language-specific execution logic
     switch (language.toLowerCase()) {
       case "java": {
         const className = "Main";
@@ -72,14 +65,14 @@ set -e
           `echo '${escapedCode}' | sudo -u ${execId} tee ${javaFilePath} > /dev/null`,
         );
 
-        // Java needs more memory
         scriptContent += `
 ulimit -t 10
 ulimit -u 50
 ulimit -f 10240
-ulimit -m 524288
-javac ${javaFilePath}
-java -Xmx256m -Xms64m -cp ${tempDir} ${className}
+ulimit -s 8192
+cd ${tempDir}
+javac ${javaFilePath} 2>&1
+java -Xmx256m -Xms64m -cp ${tempDir} ${className} 2>&1
 `;
         break;
       }
@@ -97,10 +90,10 @@ java -Xmx256m -Xms64m -cp ${tempDir} ${className}
 ulimit -t 10
 ulimit -u 40
 ulimit -f 10240
-ulimit -d 262144
 ulimit -s 8192
-g++ -o ${executableFile} ${cppFilePath}
-${executableFile}
+cd ${tempDir}
+g++ -o ${executableFile} ${cppFilePath} 2>&1
+${executableFile} 2>&1
 `;
         break;
       }
@@ -113,14 +106,14 @@ ${executableFile}
           `echo '${escapedCode}' | sudo -u ${execId} tee ${jsFilePath} > /dev/null`,
         );
 
-        // Node.js needs reasonable memory to start
+        // Node.js needs less restrictive limits
         scriptContent += `
 ulimit -t 10
 ulimit -u 40
 ulimit -f 10240
-ulimit -d 262144
-ulimit -s 8192
-node --max-old-space-size=128 ${jsFilePath}
+ulimit -s 16384
+cd ${tempDir}
+/usr/bin/node --max-old-space-size=256 ${jsFilePath} 2>&1
 `;
         break;
       }
@@ -137,9 +130,9 @@ node --max-old-space-size=128 ${jsFilePath}
 ulimit -t 10
 ulimit -u 40
 ulimit -f 10240
-ulimit -d 262144
 ulimit -s 8192
-python3 ${pyFilePath}
+cd ${tempDir}
+/usr/bin/python3 ${pyFilePath} 2>&1
 `;
         break;
       }
@@ -159,40 +152,63 @@ python3 ${pyFilePath}
     );
     await execShellCommand(`sudo chmod +x ${scriptPath}`);
 
-    // Execute the script with timeout
-    const executeCommand = `sudo -u ${execId} timeout 15 bash ${scriptPath} 2>&1`;
+    console.log("Executing script...");
+    const executeCommand = `sudo -u ${execId} bash ${scriptPath}`;
 
     let output;
     try {
       output = await execShellCommand(executeCommand, {
-        timeout: 16000,
+        timeout: 15000,
         maxBuffer: 1024 * 1024,
+        killSignal: "SIGKILL",
       });
-    } catch (execError) {
-      // Capture error output
-      const errorOutput = execError.message || execError.toString();
 
-      if (errorOutput.includes("timeout") || errorOutput.includes("SIGTERM")) {
+      console.log("Execution successful!");
+      console.log("Output:", output);
+    } catch (execError) {
+      console.error("Execution failed!");
+      console.error("Error code:", execError.code);
+      console.error("Error output:", execError.output || execError.message);
+
+      // Check if it was killed by timeout
+      if (execError.killed || execError.signal === "SIGKILL") {
         throw new Error(
           "Execution timeout: Your code took too long to execute (max 15 seconds)",
         );
-      } else if (
-        errorOutput.includes("Segmentation fault") ||
-        errorOutput.includes("core dumped")
-      ) {
-        throw new Error(
-          "Segmentation fault: Your code caused a memory access violation",
-        );
-      } else if (
-        errorOutput.includes("out of memory") ||
-        errorOutput.includes("OOM")
-      ) {
-        throw new Error("Out of memory: Your code used too much memory");
-      } else if (errorOutput.includes("CPU time")) {
-        throw new Error("CPU time limit exceeded");
-      } else {
-        throw new Error(errorOutput);
       }
+
+      if (execError.code === 137) {
+        throw new Error(
+          "Process killed: CPU time limit exceeded (max 10 seconds)",
+        );
+      }
+
+      if (execError.code === 124) {
+        throw new Error(
+          "Execution timeout: Your code took too long to execute",
+        );
+      }
+
+      // Return the actual error output if available
+      if (execError.output && execError.output.trim()) {
+        const errorOutput = execError.output.trim();
+        // Filter out the bash line number info, just show the actual error
+        const lines = errorOutput.split("\n");
+        const relevantError = lines
+          .filter(
+            (line) =>
+              !line.includes("execute.sh: line") &&
+              !line.includes("core dumped") &&
+              line.trim().length > 0,
+          )
+          .join("\n");
+
+        if (relevantError) {
+          throw new Error(relevantError);
+        }
+      }
+
+      throw new Error(execError.message || "Code execution failed");
     }
 
     res.json({
@@ -200,7 +216,7 @@ python3 ${pyFilePath}
       executionTime: new Date().toISOString(),
     });
   } catch (error) {
-    console.error("Execution error:", error.message);
+    console.error("Final error:", error.message);
 
     res.status(500).json({
       error: error.message || "An error occurred during code execution",
