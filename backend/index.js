@@ -1,7 +1,7 @@
 import express from "express";
 import path from "path";
 import cors from "cors";
-import cookieParser from "cookie-parser"; // ✅ Add this
+import cookieParser from "cookie-parser";
 import { createRequire } from "module";
 import { fileURLToPath } from "url";
 import { dirname } from "path";
@@ -9,6 +9,7 @@ import { toNodeHandler } from "better-auth/node";
 import { auth } from "./auth.js";
 import { v4 as uuidv4 } from "uuid";
 import dotenv from "dotenv";
+import snippetRoutes from "./routes/snippets.js";
 
 dotenv.config();
 
@@ -25,7 +26,7 @@ const {
 
 const app = express();
 
-// CORS
+// ✅ 1. CORS - MUST be first
 app.use(
   cors({
     origin: process.env.FRONTEND_URL || "http://localhost:5173",
@@ -36,22 +37,27 @@ app.use(
   }),
 );
 
-// ✅ Add cookie parser
+// ✅ 2. Cookie parser
 app.use(cookieParser());
 
-// Debug middleware
+// ✅ 3. Debug middleware
 app.use((req, res, next) => {
   console.log(`📨 ${req.method} ${req.url}`);
-  if (req.url.includes("callback")) {
-    console.log("Query params:", req.query);
-  }
   next();
 });
 
-// Better Auth routes
+// ✅ 4. Better Auth routes BEFORE express.json()
+// Auth needs to parse body itself
 app.all("/api/auth/*", toNodeHandler(auth));
 
-// ✅ Redirect handler for dashboard
+// ✅ 5. JSON parser - BEFORE other routes
+app.use(express.json({ limit: "10mb" }));
+app.use(express.urlencoded({ extended: true, limit: "10mb" }));
+
+// ✅ 6. Snippet routes - AFTER express.json()
+app.use("/api/snippets", snippetRoutes);
+
+// Redirect dashboard to frontend
 app.get("/dashboard", (req, res) => {
   const frontendUrl = process.env.FRONTEND_URL || "http://localhost:5173";
   console.log(
@@ -63,7 +69,6 @@ app.get("/dashboard", (req, res) => {
 
 // Root endpoint
 app.get("/", (req, res) => {
-  // Check if user has session cookie
   if (req.cookies && req.cookies["better-auth.session_token"]) {
     const frontendUrl = process.env.FRONTEND_URL || "http://localhost:5173";
     console.log("🔄 User has session, redirecting to frontend dashboard");
@@ -77,9 +82,7 @@ app.get("/", (req, res) => {
   });
 });
 
-app.use(express.json());
-
-// Your existing /api/execute endpoint
+// Code execution endpoint
 app.post("/api/execute", async (req, res) => {
   console.log("\n=== NEW EXECUTION REQUEST ===");
   console.log("Language:", req.body.language);
@@ -271,13 +274,33 @@ cd ${tempDir}
   }
 });
 
+// 404 handler
+app.use((req, res) => {
+  res.status(404).json({
+    error: "Not found",
+    path: req.path,
+  });
+});
+
+// Error handler
+app.use((err, req, res, next) => {
+  console.error("Error:", err);
+  res.status(500).json({
+    error: err.message || "An unexpected error occurred",
+    timestamp: new Date().toISOString(),
+  });
+});
+
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, "0.0.0.0", () => {
-  console.log(`🚀 Server running on http://localhost:${PORT}`);
+const HOST = process.env.HOST || "0.0.0.0";
+
+app.listen(Number(PORT), HOST, () => {
+  console.log(`🚀 Server running on http://${HOST}:${PORT}`);
   console.log(
     `🌐 CORS enabled for: ${process.env.FRONTEND_URL || "http://localhost:5173"}`,
   );
   console.log(`🔐 Auth endpoints: http://localhost:${PORT}/api/auth/*`);
+  console.log(`📝 Snippet endpoints: http://localhost:${PORT}/api/snippets`);
   console.log(
     `📊 Database: ${process.env.DATABASE_URL ? "✅ Connected" : "❌ Not configured"}`,
   );
